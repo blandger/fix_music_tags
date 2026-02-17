@@ -1,0 +1,13 @@
+[package]
+name = "fix_music_tags"
+version = "0.1.0"
+edition = "2024"
+authors = ["Yuriy Larin"]
+description = "CLI for fixing music (mp3) tags text descriptions"
+
+
+[dependencies]
+encoding_rs = "0.8"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
