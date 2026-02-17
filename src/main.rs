@@ -1,4 +1,8 @@
 use clap::Parser;
+use lofty::config::WriteOptions;
+use lofty::prelude::*;
+use lofty::probe::Probe;
+use lofty::tag::Accessor;
 use std::path::PathBuf;
 use tracing::{debug, error, info, warn};
 
@@ -10,15 +14,15 @@ use fix_music_tags::{detect_encoding_issue, fix_encoding};
 #[derive(Parser, Debug)]
 #[command(
     name = "fix_music_tags",
-    about = "Detects and repairs broken text in MP3 tags",
+    about = "Detects and repairs broken Win-1251 audio tags (MP3, FLAC, WAV, OGG, …)",
     version
 )]
 struct Args {
-    /// Directory to scan for MP3 files
+    /// Directory to scan recursively for audio files
     #[arg(short, long, value_name = "DIR")]
     dir: PathBuf,
 
-    /// Dry-run mode: detect and report issues without modifying files
+    /// Dry-run: detect and report issues without modifying any files
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     dry_run: bool,
 }
@@ -57,7 +61,7 @@ fn main() {
 }
 
 // ------------------------------------------------------------------ //
-//  Scan logic (skeleton — MP3 tag reading comes later)                //
+//  Scan logic                                                          //
 // ------------------------------------------------------------------ //
 #[derive(Default, Debug)]
 struct ScanStats {
@@ -74,57 +78,138 @@ fn scan_directory(dir: &PathBuf, dry_run: bool) -> Result<ScanStats, std::io::Er
         let entry = entry?;
         let path = entry.path();
 
-        // Skip non-MP3 files (later this will be replaced by proper tag reading)
-        if path.extension().and_then(|e| e.to_str()) != Some("mp3") {
-            debug!(path = %path.display(), "Skipping non-MP3 file");
+        if !path.is_file() {
             continue;
         }
 
+        // Log the file name before any processing begins.
+        info!(file = %path.display(), "Processing file");
+
+        // Let lofty decide whether it can read tags from this file.
+        // This covers MP3, FLAC, WAV, OGG, AIFF, AAC, and more.
+        let tagged_file = match Probe::open(&path).and_then(|p| p.read()) {
+            Ok(tf) => tf,
+            Err(e) => {
+                debug!(file = %path.display(), error = %e, "lofty could not read file, skipping");
+                continue;
+            }
+        };
+
         stats.processed += 1;
 
-        // Placeholder: use the filename stem as the "tag value" for now
-        let stem = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or_default()
-            .to_owned();
+        // Collect all tags attached to the file (a file may have more than one).
+        let mut file_had_fix = false;
 
-        process_tag_value(&stem, "filename", dry_run, &mut stats);
-    }
+        // lofty's TaggedFile owns the tags; we need a mutable reference later,
+        // so we build a list of (field_name, broken_value, fixed_value) first,
+        // then apply them in a second pass.
+        let tags = tagged_file.tags();
 
-    Ok(stats)
-}
-
-/// Runs detection + optional fix on a single tag value.
-fn process_tag_value(value: &str, tag_name: &str, dry_run: bool, stats: &mut ScanStats) {
-    match detect_encoding_issue(value) {
-        None => {
-            debug!(tag = tag_name, value, "Tag looks fine, skipping");
-            stats.skipped += 1;
+        // Gather fixes for every tag on the file.
+        struct Patch {
+            field: &'static str,
+            fixed: String,
         }
-        Some(issue) => {
-            debug!(tag = tag_name, value, ?issue, "Broken encoding detected");
+        let mut patches: Vec<Patch> = Vec::new();
 
-            match fix_encoding(value, &issue) {
-                Err(e) => {
-                    error!(tag = tag_name, value, error = %e, "Failed to fix tag");
-                    stats.errors += 1;
-                }
-                Ok(fixed) => {
-                    if dry_run {
-                        info!(
-                            tag = tag_name,
-                            original = value,
-                            fixed,
-                            "[dry-run] Would fix tag"
-                        );
-                    } else {
-                        info!(tag = tag_name, original = value, fixed, "Fixed tag");
-                        // TODO: write fixed value back to the MP3 file
+        for tag in tags {
+            // Extend the lifetime of each temporary Cow<str> by binding to locals first.
+            let title = tag.title();
+            let artist = tag.artist();
+            let album = tag.album();
+            let genre = tag.genre();
+            let comment = tag.comment();
+
+            let fields: &[(&'static str, Option<&str>)] = &[
+                ("title", title.as_deref()),
+                ("artist", artist.as_deref()),
+                ("album", album.as_deref()),
+                ("genre", genre.as_deref()),
+                ("comment", comment.as_deref()),
+            ];
+
+            for &(field_name, maybe_value) in fields {
+                let Some(value) = maybe_value else { continue };
+
+                match detect_encoding_issue(value) {
+                    None => {
+                        debug!(file = %path.display(), tag = field_name, value, "Tag ok");
+                        stats.skipped += 1;
                     }
-                    stats.fixed += 1;
+                    Some(issue) => match fix_encoding(value, &issue) {
+                        Err(e) => {
+                            error!(
+                                file  = %path.display(),
+                                tag   = field_name,
+                                value,
+                                error = %e,
+                                "Failed to fix tag"
+                            );
+                            stats.errors += 1;
+                        }
+                        Ok(fixed) => {
+                            info!(
+                                file     = %path.display(),
+                                tag      = field_name,
+                                original = value,
+                                fixed    = %fixed,
+                                dry_run,
+                                "Tag needs fixing"
+                            );
+                            if !dry_run {
+                                patches.push(Patch {
+                                    field: field_name,
+                                    fixed,
+                                });
+                            }
+                            file_had_fix = true;
+                        }
+                    },
                 }
             }
         }
+
+        // Apply patches and write the file back to disk (non-dry-run only).
+        if !dry_run && !patches.is_empty() {
+            // Re-open mutably so we can write.
+            match Probe::open(&path).and_then(|p| p.read()) {
+                Err(e) => {
+                    error!(file = %path.display(), error = %e, "Failed to re-open file for writing");
+                    stats.errors += 1;
+                }
+                Ok(mut tagged_file) => {
+                    if let Some(tag) = tagged_file.primary_tag_mut() {
+                        for patch in &patches {
+                            match patch.field {
+                                "title" => tag.set_title(patch.fixed.clone()),
+                                "artist" => tag.set_artist(patch.fixed.clone()),
+                                "album" => tag.set_album(patch.fixed.clone()),
+                                "genre" => tag.set_genre(patch.fixed.clone()),
+                                "comment" => tag.set_comment(patch.fixed.clone()),
+                                _ => {}
+                            }
+                        }
+
+                        match tagged_file.save_to_path(&path, WriteOptions::default()) {
+                            Ok(_) => {
+                                info!(file = %path.display(), "File saved successfully");
+                                stats.fixed += 1;
+                            }
+                            Err(e) => {
+                                error!(file = %path.display(), error = %e, "Failed to save file");
+                                stats.errors += 1;
+                            }
+                        }
+                    } else {
+                        warn!(file = %path.display(), "No primary tag found, cannot write patches");
+                        stats.errors += 1;
+                    }
+                }
+            }
+        } else if file_had_fix {
+            stats.fixed += 1;
+        }
     }
+
+    Ok(stats)
 }
