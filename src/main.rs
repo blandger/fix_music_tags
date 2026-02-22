@@ -33,11 +33,11 @@ struct Args {
 // ------------------------------------------------------------------ //
 fn main() {
     // Initialize tracing; RUST_LOG env variable controls the filter level
-    // e.g. RUST_LOG=debug ./fix_music_tags --dir ./music
+    // e.g. RUST_LOG=info ./fix_music_tags --dir ./music
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("debug")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
 
@@ -49,8 +49,9 @@ fn main() {
         warn!("Dry-run mode is ON — no files will be modified");
     }
 
-    match scan_directory(&args.dir, args.dry_run) {
-        Ok(stats) => info!(
+    let mut stats = ScanStats::default();
+    match scan_directory(&args.dir, args.dry_run, &mut stats) {
+        Ok(()) => info!(
             processed = stats.processed,
             fixed = stats.fixed,
             skipped = stats.skipped,
@@ -72,16 +73,14 @@ struct ScanStats {
     errors: usize,
 }
 
-fn scan_directory(dir: &PathBuf, dry_run: bool) -> Result<ScanStats, std::io::Error> {
-    let mut stats = ScanStats::default();
-
+fn scan_directory(dir: &PathBuf, dry_run: bool, stats: &mut ScanStats) -> Result<(), std::io::Error> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
 
         if path.is_dir() {
             info!(file = %path.display(), "Processing SUB-FOLDER !");
-            scan_directory(&path, dry_run)?;
+            scan_directory(&path, dry_run, stats)?;
         }
         if !path.is_file() {
             continue;
@@ -95,7 +94,7 @@ fn scan_directory(dir: &PathBuf, dry_run: bool) -> Result<ScanStats, std::io::Er
         let tagged_file = match Probe::open(&path).and_then(|p| p.read()) {
             Ok(tf) => tf,
             Err(e) => {
-                error!(file = %path.display(), error = %e, "lofty could not read file, skipping");
+                warn!(file = %path.display(), error = %e, "lofty could not read file, skipping");
                 stats.errors += 1;
                 continue;
             }
@@ -158,12 +157,12 @@ fn scan_directory(dir: &PathBuf, dry_run: bool) -> Result<ScanStats, std::io::Er
                         stats.errors += 1;
                     }
                     Ok(fixed) => {
-                        info!(
+                        error!(
                             tag      = field_name,
                             original = value,
                             fixed    = %fixed,
                             dry_run,
-                            "Tag needs fixing"
+                            "Tag needs fixing !!"
                         );
                         if !dry_run {
                             patches.push(Patch {
@@ -224,5 +223,5 @@ fn scan_directory(dir: &PathBuf, dry_run: bool) -> Result<ScanStats, std::io::Er
         }
     }
 
-    Ok(stats)
+    Ok(())
 }
