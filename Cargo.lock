@@ -190,9 +190,8 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "lofty"
-version = "0.22.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca260c51a9c71f823fbfd2e6fbc8eb2ee09834b98c00763d877ca8bfa85cde3e"
+version = "0.23.2"
+source = "git+ssh://git@github.com/blandger/lofty-rs-blandger.git?branch=fix_read_non_utf8_text_tags#025a25afa9975e2f196062207a5e42460fd14ff7"
 dependencies = [
  "byteorder",
  "data-encoding",
@@ -205,9 +204,8 @@ dependencies = [
 
 [[package]]
 name = "lofty_attr"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed9983e64b2358522f745c1251924e3ab7252d55637e80f6a0a3de642d6a9efc"
+version = "0.12.0"
+source = "git+ssh://git@github.com/blandger/lofty-rs-blandger.git?branch=fix_read_non_utf8_text_tags#025a25afa9975e2f196062207a5e42460fd14ff7"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -257,8 +255,7 @@ dependencies = [
 [[package]]
 name = "ogg_pager"
 version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d6d1ca8364b84e0cf725eed06b1460c44671e6c0fb28765f5262de3ece07fdc"
+source = "git+ssh://git@github.com/blandger/lofty-rs-blandger.git?branch=fix_read_non_utf8_text_tags#025a25afa9975e2f196062207a5e42460fd14ff7"
 dependencies = [
  "byteorder",
 ]

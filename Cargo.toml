@@ -11,4 +11,6 @@ encoding_rs = "0.8"
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-lofty = "0.22"
+#lofty = "0.23"
+#lofty = { path = "../lofty-rs-blandger/lofty", branch = ""}
+lofty = { git = "ssh://git@github.com/blandger/lofty-rs-blandger.git", branch = "fix_read_non_utf8_text_tags"}

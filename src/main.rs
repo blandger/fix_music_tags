@@ -3,6 +3,7 @@ use lofty::config::WriteOptions;
 use lofty::prelude::*;
 use lofty::probe::Probe;
 use lofty::tag::Accessor;
+use lofty::tag::items::RUSSIAN;
 use std::path::PathBuf;
 use tracing::{debug, error, info, warn};
 
@@ -14,7 +15,7 @@ use fix_music_tags::{detect_encoding_issue, fix_encoding};
 #[derive(Parser, Debug)]
 #[command(
     name = "fix_music_tags",
-    about = "Detects and repairs broken Win-1251 audio tags (MP3, FLAC, WAV, OGG, …)",
+    about = "Detects and repairs broken audio tags (MP3, FLAC, WAV, OGG, …)",
     version
 )]
 struct Args {
@@ -28,7 +29,7 @@ struct Args {
 }
 
 // ------------------------------------------------------------------ //
-//  Entry point                                                         //
+//  Entry point                                                       //
 // ------------------------------------------------------------------ //
 fn main() {
     // Initialize tracing; RUST_LOG env variable controls the filter level
@@ -36,7 +37,7 @@ fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("debug")),
         )
         .init();
 
@@ -61,7 +62,7 @@ fn main() {
 }
 
 // ------------------------------------------------------------------ //
-//  Scan logic                                                          //
+//  Scan logic                                                        //
 // ------------------------------------------------------------------ //
 #[derive(Default, Debug)]
 struct ScanStats {
@@ -78,6 +79,10 @@ fn scan_directory(dir: &PathBuf, dry_run: bool) -> Result<ScanStats, std::io::Er
         let entry = entry?;
         let path = entry.path();
 
+        if path.is_dir() {
+            info!(file = %path.display(), "Processing SUB-FOLDER !");
+            scan_directory(&path, dry_run)?;
+        }
         if !path.is_file() {
             continue;
         }
@@ -90,7 +95,8 @@ fn scan_directory(dir: &PathBuf, dry_run: bool) -> Result<ScanStats, std::io::Er
         let tagged_file = match Probe::open(&path).and_then(|p| p.read()) {
             Ok(tf) => tf,
             Err(e) => {
-                debug!(file = %path.display(), error = %e, "lofty could not read file, skipping");
+                error!(file = %path.display(), error = %e, "lofty could not read file, skipping");
+                stats.errors += 1;
                 continue;
             }
         };
@@ -103,7 +109,11 @@ fn scan_directory(dir: &PathBuf, dry_run: bool) -> Result<ScanStats, std::io::Er
         // lofty's TaggedFile owns the tags; we need a mutable reference later,
         // so we build a list of (field_name, broken_value, fixed_value) first,
         // then apply them in a second pass.
-        let tags = tagged_file.tags();
+        // Read only the primary tag (avoids duplicates from ID3v1 + ID3v2).
+        let Some(tag) = tagged_file.primary_tag() else {
+            debug!(file = %path.display(), "No primary tag found");
+            continue;
+        };
 
         // Gather fixes for every tag on the file.
         struct Patch {
@@ -112,60 +122,58 @@ fn scan_directory(dir: &PathBuf, dry_run: bool) -> Result<ScanStats, std::io::Er
         }
         let mut patches: Vec<Patch> = Vec::new();
 
-        for tag in tags {
-            // Extend the lifetime of each temporary Cow<str> by binding to locals first.
-            let title = tag.title();
-            let artist = tag.artist();
-            let album = tag.album();
-            let genre = tag.genre();
-            let comment = tag.comment();
+        let title = tag.title();
+        let artist = tag.artist();
+        let album = tag.album();
+        let genre = tag.genre();
+        let comment = tag.comment();
 
-            let fields: &[(&'static str, Option<&str>)] = &[
-                ("title", title.as_deref()),
-                ("artist", artist.as_deref()),
-                ("album", album.as_deref()),
-                ("genre", genre.as_deref()),
-                ("comment", comment.as_deref()),
-            ];
+        let fields: &[(&'static str, Option<&str>)] = &[
+            ("title", title.as_deref()),
+            ("artist", artist.as_deref()),
+            ("album", album.as_deref()),
+            ("genre", genre.as_deref()),
+            ("comment", comment.as_deref()),
+        ];
 
-            for &(field_name, maybe_value) in fields {
-                let Some(value) = maybe_value else { continue };
+        for &(field_name, maybe_value) in fields {
+            let Some(value) = maybe_value else { continue };
 
-                match detect_encoding_issue(value) {
-                    None => {
-                        debug!(file = %path.display(), tag = field_name, value, "Tag ok");
-                        stats.skipped += 1;
-                    }
-                    Some(issue) => match fix_encoding(value, &issue) {
-                        Err(e) => {
-                            error!(
-                                file  = %path.display(),
-                                tag   = field_name,
-                                value,
-                                error = %e,
-                                "Failed to fix tag"
-                            );
-                            stats.errors += 1;
-                        }
-                        Ok(fixed) => {
-                            info!(
-                                file     = %path.display(),
-                                tag      = field_name,
-                                original = value,
-                                fixed    = %fixed,
-                                dry_run,
-                                "Tag needs fixing"
-                            );
-                            if !dry_run {
-                                patches.push(Patch {
-                                    field: field_name,
-                                    fixed,
-                                });
-                            }
-                            file_had_fix = true;
-                        }
-                    },
+            match detect_encoding_issue(value) {
+                None => {
+                    debug!(
+                        /*file = %path.display(), */ tag = field_name,
+                        value, "Tag ok"
+                    );
+                    stats.skipped += 1;
                 }
+                Some(issue) => match fix_encoding(value, &issue) {
+                    Err(e) => {
+                        error!(
+                            tag   = field_name,
+                            value,
+                            error = %e,
+                            "Failed to fix tag"
+                        );
+                        stats.errors += 1;
+                    }
+                    Ok(fixed) => {
+                        info!(
+                            tag      = field_name,
+                            original = value,
+                            fixed    = %fixed,
+                            dry_run,
+                            "Tag needs fixing"
+                        );
+                        if !dry_run {
+                            patches.push(Patch {
+                                field: field_name,
+                                fixed,
+                            });
+                        }
+                        file_had_fix = true;
+                    }
+                },
             }
         }
 
@@ -179,6 +187,10 @@ fn scan_directory(dir: &PathBuf, dry_run: bool) -> Result<ScanStats, std::io::Er
                 }
                 Ok(mut tagged_file) => {
                     if let Some(tag) = tagged_file.primary_tag_mut() {
+                        // Remove existing comment frames to avoid validation errors.
+                        // Many files have COMM frames with invalid lang=[0,0,0].
+                        // tag.remove_key(ItemKey::Comment);
+
                         for patch in &patches {
                             match patch.field {
                                 "title" => tag.set_title(patch.fixed.clone()),
@@ -190,7 +202,8 @@ fn scan_directory(dir: &PathBuf, dry_run: bool) -> Result<ScanStats, std::io::Er
                             }
                         }
 
-                        match tagged_file.save_to_path(&path, WriteOptions::default()) {
+                        let options = WriteOptions::default().preferred_language(Some(RUSSIAN));
+                        match tagged_file.save_to_path(&path, options) {
                             Ok(_) => {
                                 info!(file = %path.display(), "File saved successfully");
                                 stats.fixed += 1;
