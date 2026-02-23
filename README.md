@@ -1,6 +1,6 @@
 ## CLI utility for fixing music tags in files inside folder 
 
-This is a small utility program to fix 'text tags values' in my old music files I have in my collection. Those files have an incorrect, non utf8 encoding inside tags. The tags are supported: title, artist, album, genre, comment.
+This is a small utility program to fix 'text tags values' (ID3v2 only) in my old music files I have in my collection. Those files have an incorrect, non utf8 encoding inside tags. The tags **ID3v2** only are supported: title, artist, album, genre, comment.
 
 **Currently only one approach for checking and updating encoding is implemented, but that can be improved by adding more logic.** 
 
