@@ -72,14 +72,27 @@ pub fn detect_encoding_issue(text: &str) -> Option<EncodingIssue> {
         return None;
     }
 
-    // Guard: non-Latin-1 codepoints (> 0xFF) that are not ASCII
-    // indicate a real non-Latin UTF-8 language — do not touch.
+    // Guard: non-Latin-1 codepoints (> 0xFF) indicate real UTF-8 language.
     let has_non_latin1 = chars.iter().any(|&c| (c as u32) > 0xFF);
     if has_non_latin1 {
         return None;
     }
 
-    // Guard: mostly plain ASCII → treat as English or neutral text, skip.
+    // Check for Latin Extended (0x80–0xFF) first — this is the primary signal.
+    let latin_ext_count = chars
+        .iter()
+        .filter(|&&c| (c as u32) > 0x7F && (c as u32) <= 0xFF)
+        .count();
+    let latin_ext_ratio = latin_ext_count as f32 / total as f32;
+
+    // If we have significant Latin Extended presence, this is likely mojibake.
+    // Either high ratio OR absolute count >= 3 (to catch mixed strings like "The Best.×àñòü 2").
+    if latin_ext_ratio >= LATIN_EXT_RATIO_THRESHOLD || latin_ext_count >= 3 {
+        return Some(EncodingIssue::Win1251AsLatin1);
+    }
+
+    // Guard: mostly plain ASCII with no Latin Extended → treat as English.
+    // This guard is now AFTER Latin Extended check, so mixed strings are caught.
     let ascii_count = chars
         .iter()
         .filter(|&&c| (c as u32) >= 0x20 && (c as u32) <= 0x7E)
@@ -87,16 +100,6 @@ pub fn detect_encoding_issue(text: &str) -> Option<EncodingIssue> {
     let ascii_ratio = ascii_count as f32 / total as f32;
     if ascii_ratio > ASCII_RATIO_SKIP_THRESHOLD {
         return None;
-    }
-
-    // Heuristic: high fraction of Latin Extended bytes → Win1251-as-Latin1.
-    let latin_ext_count = chars
-        .iter()
-        .filter(|&&c| (c as u32) > 0x7F && (c as u32) <= 0xFF)
-        .count();
-    let latin_ext_ratio = latin_ext_count as f32 / total as f32;
-    if latin_ext_ratio >= LATIN_EXT_RATIO_THRESHOLD {
-        return Some(EncodingIssue::Win1251AsLatin1);
     }
 
     None
@@ -136,7 +139,7 @@ fn fix_win1251_as_latin1(text: &str) -> Result<String, FixError> {
         return Err(FixError::DecodingFailed);
     }
 
-    Ok(decoded.into_owned())
+    Ok(decoded.trim().to_string())
 }
 
 // ------------------------------------------------------------------ //
@@ -147,6 +150,27 @@ mod tests {
     use super::*;
 
     // ---- fix_win1251_as_latin1 ------------------------------------
+    #[test]
+    fn fix_mixed_value() {
+        let broken = "The Best.×àñòü 2";
+        assert_eq!(
+            detect_encoding_issue(broken),
+            Some(EncodingIssue::Win1251AsLatin1)
+        );
+        let fixed = fix_encoding(broken, &EncodingIssue::Win1251AsLatin1).unwrap();
+        assert_eq!(fixed, "The Best.Часть 2");
+    }
+
+    #[test]
+    fn fix_magic_lake() {
+        let broken = "Âîëøåáíîå îçåðî";
+        assert_eq!(
+            detect_encoding_issue(broken),
+            Some(EncodingIssue::Win1251AsLatin1)
+        );
+        let fixed = fix_encoding(broken, &EncodingIssue::Win1251AsLatin1).unwrap();
+        assert_eq!(fixed, "Волшебное озеро");
+    }
 
     #[test]
     fn fix_known_broken_title() {
