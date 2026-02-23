@@ -158,6 +158,7 @@ fn scan_directory(dir: &PathBuf, dry_run: bool, stats: &mut ScanStats) -> Result
                     }
                     Ok(fixed) => {
                         error!(
+                            file = %path.display(),
                             tag      = field_name,
                             original = value,
                             fixed    = %fixed,
