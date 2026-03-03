@@ -24,9 +24,7 @@ struct Args {
     dry_run: bool,
 }
 
-// ------------------------------------------------------------------ //
-//  Entry point                                                       //
-// ------------------------------------------------------------------ //
+/// Main entry point                                                       //
 fn main() {
     // Initialize tracing; RUST_LOG env variable controls the filter level
     // e.g. RUST_LOG=info ./fix_music_tags --dir ./music
