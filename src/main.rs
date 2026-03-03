@@ -108,10 +108,13 @@ fn scan_directory(dir: &PathBuf, dry_run: bool, stats: &mut ScanStats) -> Result
         // lofty's TaggedFile owns the tags; we need a mutable reference later,
         // so we build a list of (field_name, broken_value, fixed_value) first,
         // then apply them in a second pass.
-        // Read only the primary tag (avoids duplicates from ID3v1 + ID3v2).
-        let Some(tag) = tagged_file.primary_tag() else {
-            debug!(file = %path.display(), "No primary tag found");
-            continue;
+        // Try primary_tag first, fall back to first available tag.
+        let tag = match tagged_file.primary_tag().or_else(|| tagged_file.first_tag()) {
+            Some(t) => t,
+            None => {
+                debug!(file = %path.display(), "No tags found in file");
+                continue;
+            }
         };
 
         // Gather fixes for every tag on the file.
@@ -138,7 +141,7 @@ fn scan_directory(dir: &PathBuf, dry_run: bool, stats: &mut ScanStats) -> Result
         for &(field_name, maybe_value) in fields {
             let Some(value) = maybe_value else { continue };
 
-            match detect_encoding_issue(value) {
+            match detect_encoding_issue(value.trim()) {
                 None => {
                     debug!(
                         /*file = %path.display(), */ tag = field_name,
@@ -160,7 +163,7 @@ fn scan_directory(dir: &PathBuf, dry_run: bool, stats: &mut ScanStats) -> Result
                         error!(
                             file = %path.display(),
                             tag      = field_name,
-                            original = value,
+                            original = value.trim(),
                             fixed    = %fixed,
                             dry_run,
                             "Tag needs fixing !!"
@@ -191,6 +194,17 @@ fn scan_directory(dir: &PathBuf, dry_run: bool, stats: &mut ScanStats) -> Result
                         // Many files have COMM frames with invalid lang=[0,0,0].
                         // tag.remove_key(ItemKey::Comment);
 
+                        let tag = if let Some(t) = tagged_file.primary_tag_mut() {
+                            t
+                        } else if let Some(t) = tagged_file.first_tag_mut() {
+                            t
+                        } else {
+                            warn!(file = %path.display(), "No writable tag found");
+                            stats.errors += 1;
+                            continue;
+                        };
+
+
                         for patch in &patches {
                             match patch.field {
                                 "title" => tag.set_title(patch.fixed.clone()),
@@ -203,19 +217,19 @@ fn scan_directory(dir: &PathBuf, dry_run: bool, stats: &mut ScanStats) -> Result
                         }
 
                         let options = WriteOptions::default().preferred_language(Some(RUSSIAN));
-                        match tagged_file.save_to_path(&path, options) {
-                            Ok(_) => {
-                                info!(file = %path.display(), "File saved successfully");
-                                stats.fixed += 1;
+                            match tagged_file.save_to_path(&path, options) {
+                                Ok(_) => {
+                                    info!(file = %path.display(), "File saved successfully");
+                                    stats.fixed += 1;
+                                }
+                                Err(e) => {
+                                    error!(file = %path.display(), error = %e, "Failed to save file");
+                                    stats.errors += 1;
+                                }
                             }
-                            Err(e) => {
-                                error!(file = %path.display(), error = %e, "Failed to save file");
-                                stats.errors += 1;
-                            }
-                        }
-                    } else {
-                        warn!(file = %path.display(), "No primary tag found, cannot write patches");
-                        stats.errors += 1;
+                        } else {
+                            warn!(file = %path.display(), "No primary tag found, cannot write patches");
+                            stats.errors += 1;
                     }
                 }
             }
