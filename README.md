@@ -28,7 +28,7 @@ That only checks if there are incorrect tags values inside music files.
 `RUST_LOG=info ./fix_music_tags --dir "./music/folder with/empty spaces/"`
 
 #### Real run (then all is OK, otherwise dry-run in code by default)
-That command (with --dry-run false ) runs and rewrites.
+That command (with --dry-run false ) runs and rewrites music files with new values.
 
 `cargo run -- --dir "./music/folder with/empty spaces/" --dry-run false`
 
