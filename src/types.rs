@@ -1,12 +1,3 @@
-
-/// Fraction of characters in the Latin Extended range (0x80–0xFF)
-/// required to trigger the Win1251-as-Latin1 heuristic.
-pub const LATIN_EXT_RATIO_THRESHOLD: f32 = 0.30;
-/// Fraction of plain ASCII printable characters (0x20–0x7E) above
-/// which text is considered "mostly English / neutral" and skipped.
-pub const ASCII_RATIO_SKIP_THRESHOLD: f32 = 0.60;
-
-
 // ------------------------------------------------------------------ //
 //  Invariant: describes HOW a string is broken.                       //
 //  Each variant maps to exactly one detection + one fix strategy.     //
@@ -45,3 +36,22 @@ impl std::fmt::Display for FixError {
 }
 
 impl std::error::Error for FixError {}
+
+/// Statistics info gathered during scan check or files fixing
+#[derive(Default, Debug)]
+pub struct ScanStats {
+    /// processed files number
+    pub processed: usize,
+    /// files number to be fixed in 'dry-mode' (or fixed in reality)
+    pub fixed: usize,
+    /// files skipped from processing (any reason)
+    pub skipped: usize,
+    /// files with errors
+    pub errors: usize,
+}
+
+/// Gather fixes for every tag on the file. Which tag is fixed and new value.
+pub struct Patch {
+    pub field_name: &'static str,
+    pub fixed_value: String,
+}
