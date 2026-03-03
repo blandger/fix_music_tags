@@ -72,13 +72,19 @@ mod tests {
     }
 
     #[test]
+    fn fix_known_broken_artist_01() {
+        let result = fix_encoding("Ïðèïàäêè ìîëîäîñòè", &EncodingIssue::Win1251AsLatin1).unwrap();
+        assert_eq!(result, "Припадки молодости");
+    }
+
+    #[test]
     fn fix_known_broken_title() {
         let result = fix_encoding("Îäèíàêîâûå ñíû", &EncodingIssue::Win1251AsLatin1).unwrap();
         assert_eq!(result, "Одинаковые сны");
     }
 
     #[test]
-    fn fix_known_broken_artist() {
+    fn fix_known_broken_artist_02() {
         let result = fix_encoding("Îëåã Ìèòÿåâ", &EncodingIssue::Win1251AsLatin1).unwrap();
         assert_eq!(result, "Олег Митяев");
     }
