@@ -7,7 +7,8 @@ use lofty::tag::items::RUSSIAN;
 use std::path::PathBuf;
 use tracing::{debug, error, info, warn};
 
-use fix_music_tags::{detect_encoding_issue, fix_encoding};
+use fix_music_tags::fix_encoding;
+use fix_music_tags::detect::detect_encoding_issue;
 
 // ------------------------------------------------------------------ //
 //  CLI arguments                                                       //
@@ -109,11 +110,21 @@ fn scan_directory(dir: &PathBuf, dry_run: bool, stats: &mut ScanStats) -> Result
         // so we build a list of (field_name, broken_value, fixed_value) first,
         // then apply them in a second pass.
         // Try primary_tag first, fall back to first available tag.
-        let tag = match tagged_file.primary_tag().or_else(|| tagged_file.first_tag()) {
-            Some(t) => t,
+        // Determine tag type and get reference for reading
+        let (tag, had_id3v1_only) = match tagged_file.primary_tag() {
+            Some(t) => (t, false), // Has primary tag → ID3v2 or modern format
             None => {
-                debug!(file = %path.display(), "No tags found in file");
-                continue;
+                // No primary tag → check if ID3v1-only
+                match tagged_file.first_tag() {
+                    Some(t) => {
+                        let is_id3v1 = t.tag_type() == lofty::tag::TagType::Id3v1;
+                        (t, is_id3v1)
+                    }
+                    None => {
+                        debug!(file = %path.display(), "No tags found in file");
+                        continue;
+                    }
+                }
             }
         };
 
@@ -189,7 +200,7 @@ fn scan_directory(dir: &PathBuf, dry_run: bool, stats: &mut ScanStats) -> Result
                     stats.errors += 1;
                 }
                 Ok(mut tagged_file) => {
-                    if let Some(tag) = tagged_file.primary_tag_mut() {
+                    /*if let Some(tag) = tagged_file.primary_tag_mut() {
                         // Remove existing comment frames to avoid validation errors.
                         // Many files have COMM frames with invalid lang=[0,0,0].
                         // tag.remove_key(ItemKey::Comment);
@@ -230,6 +241,76 @@ fn scan_directory(dir: &PathBuf, dry_run: bool, stats: &mut ScanStats) -> Result
                         } else {
                             warn!(file = %path.display(), "No primary tag found, cannot write patches");
                             stats.errors += 1;
+                    }*/
+
+
+                    // Upgrade ID3v1 → ID3v2 if needed (we saved this info earlier)
+                    if had_id3v1_only {
+                        info!(file = %path.display(), "Upgrading ID3v1 → ID3v2 for UTF-8 support");
+
+                        // Read existing ID3v1 data to preserve it
+                        let id3v1_data = if let Some(tag) = tagged_file.first_tag() {
+                            (
+                                tag.title().as_deref().map(String::from),
+                                tag.artist().as_deref().map(String::from),
+                                tag.album().as_deref().map(String::from),
+                                tag.genre().as_deref().map(String::from),
+                            )
+                        } else {
+                            (None, None, None, None)
+                        };
+                        info!("Upgrading ID3v1 → ID3v2: tags data = {:?}", &id3v1_data);
+
+                        use lofty::tag::TagType;
+                        // Remove old ID3v1 (can't store UTF-8)
+                        tagged_file.remove(TagType::Id3v1);
+
+                        // Create new ID3v2 tag with old data
+                        let mut id3v2 = lofty::tag::Tag::new(TagType::Id3v2);
+
+                        if let Some(t) = id3v1_data.0 { id3v2.set_title(t); }
+                        if let Some(a) = id3v1_data.1 { id3v2.set_artist(a); }
+                        if let Some(al) = id3v1_data.2 { id3v2.set_album(al); }
+                        if let Some(g) = id3v1_data.3 { id3v2.set_genre(g); }
+
+                        tagged_file.insert_tag(id3v2);
+                    }
+
+                    // Get mutable tag reference
+                    let tag = if let Some(t) = tagged_file.primary_tag_mut() {
+                        t
+                    } else if let Some(t) = tagged_file.first_tag_mut() {
+                        t
+                    } else {
+                        warn!(file = %path.display(), "No writable tag found");
+                        stats.errors += 1;
+                        continue;
+                    };
+
+                    if !patches.is_empty() {
+                        info!(file = %path.display(), "will be patched...");
+                    }
+                    // Apply patches
+                    for patch in &patches {
+                        match patch.field {
+                            "title"  => tag.set_title(patch.fixed.clone()),
+                            "artist" => tag.set_artist(patch.fixed.clone()),
+                            "album"  => tag.set_album(patch.fixed.clone()),
+                            "genre"  => tag.set_genre(patch.fixed.clone()),
+                            _ => {}
+                        }
+                    }
+
+                    let options = WriteOptions::default().preferred_language(Some(RUSSIAN));
+                    match tagged_file.save_to_path(&path, options) {
+                        Ok(_) => {
+                            info!(file = %path.display(), "File saved successfully");
+                            stats.fixed += 1;
+                        }
+                        Err(e) => {
+                            error!(file = %path.display(), error = %e, "Failed to save file");
+                            stats.errors += 1;
+                        }
                     }
                 }
             }
